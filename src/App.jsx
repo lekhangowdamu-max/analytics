@@ -4,6 +4,7 @@ import './App.css'
 
 const MEMBERS_PER_PAGE = 20
 const ONLINE_THRESHOLD_MINUTES = 5
+const EVENTS_PAGE_SIZE = 1000
 
 function App() {
   const [session, setSession] = useState(null)
@@ -18,17 +19,7 @@ function App() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
-  const [period, setPeriod] = useState('7')
-
-  /* =========================================================
-     DASHBOARD NAVIGATION
-     ========================================================= */
-
   const [activeSection, setActiveSection] = useState('overview')
-
-  /* =========================================================
-     MEMBER ANALYTICS
-     ========================================================= */
 
   const [members, setMembers] = useState([])
   const [presence, setPresence] = useState([])
@@ -36,32 +27,20 @@ function App() {
   const [membersError, setMembersError] = useState('')
 
   const [memberSearch, setMemberSearch] = useState('')
-  const [memberStatusFilter, setMemberStatusFilter] =
-    useState('all')
-
+  const [memberStatusFilter, setMemberStatusFilter] = useState('all')
   const [memberPage, setMemberPage] = useState(1)
-
-  const [selectedMember, setSelectedMember] =
-    useState(null)
-
-  /* =========================================================
-     AUTH
-     ========================================================= */
+  const [selectedMember, setSelectedMember] = useState(null)
 
   useEffect(() => {
     checkUser()
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange(
-      (_event, currentSession) => {
-        setSession(currentSession)
-      }
-    )
+    } = supabase.auth.onAuthStateChange((_event, currentSession) => {
+      setSession(currentSession)
+    })
 
-    return () => {
-      subscription.unsubscribe()
-    }
+    return () => subscription.unsubscribe()
   }, [])
 
   async function checkUser() {
@@ -74,9 +53,7 @@ function App() {
       return
     }
 
-    const isAdmin = await checkAdmin(
-      currentSession.user.id
-    )
+    const isAdmin = await checkAdmin(currentSession.user.id)
 
     if (isAdmin) {
       setSession(currentSession)
@@ -95,13 +72,8 @@ function App() {
 
     if (error || data?.role !== 'admin') {
       await supabase.auth.signOut()
-
       setSession(null)
-
-      setLoginError(
-        'Only registered administrators can access analytics.'
-      )
-
+      setLoginError('Only registered administrators can access analytics.')
       return false
     }
 
@@ -110,15 +82,13 @@ function App() {
 
   async function handleLogin(event) {
     event.preventDefault()
-
     setLoginError('')
     setLoggingIn(true)
 
-    const { data, error } =
-      await supabase.auth.signInWithPassword({
-        email,
-        password,
-      })
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    })
 
     if (error) {
       setLoginError(error.message)
@@ -129,10 +99,7 @@ function App() {
     const userId = data.user?.id
 
     if (!userId) {
-      setLoginError(
-        'Unable to identify the logged-in user.'
-      )
-
+      setLoginError('Unable to identify the logged-in user.')
       setLoggingIn(false)
       return
     }
@@ -140,23 +107,18 @@ function App() {
     const isAdmin = await checkAdmin(userId)
 
     if (!isAdmin) {
-      setLoginError(
-        'Access denied. Only admins can use analytics.'
-      )
-
+      setLoginError('Access denied. Only admins can use analytics.')
       setLoggingIn(false)
       return
     }
 
     setSession(data.session)
     setLoggingIn(false)
-
     await loadAnalytics()
   }
 
   async function handleLogout() {
     await supabase.auth.signOut()
-
     setSession(null)
     setEvents([])
     setMembers([])
@@ -165,35 +127,43 @@ function App() {
   }
 
   /* =========================================================
-     LOAD ANALYTICS
+     LOAD ALL ANALYTICS EVENTS
      ========================================================= */
 
   async function loadAnalytics() {
     setLoading(true)
     setError('')
 
-    const { data, error: databaseError } =
-      await supabase
-        .from('analytics_events')
-        .select('*')
-        .order('created_at', {
-          ascending: false,
-        })
-        .limit(5000)
+    try {
+      const allEvents = []
+      let from = 0
 
-    if (databaseError) {
-      console.error(
-        'Analytics database error:',
-        databaseError
-      )
+      while (true) {
+        const to = from + EVENTS_PAGE_SIZE - 1
 
+        const { data, error: databaseError } = await supabase
+          .from('analytics_events')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .range(from, to)
+
+        if (databaseError) throw databaseError
+
+        allEvents.push(...(data || []))
+
+        if (!data || data.length < EVENTS_PAGE_SIZE) break
+
+        from += EVENTS_PAGE_SIZE
+      }
+
+      setEvents(allEvents)
+    } catch (databaseError) {
+      console.error('Analytics database error:', databaseError)
       setError(databaseError.message)
       setEvents([])
-    } else {
-      setEvents(data || [])
+    } finally {
+      setLoading(false)
     }
-
-    setLoading(false)
 
     await loadMemberAnalytics()
   }
@@ -207,40 +177,24 @@ function App() {
     setMembersError('')
 
     try {
-      const {
-        data: memberData,
-        error: memberError,
-      } = await supabase
+      const { data: memberData, error: memberError } = await supabase
         .from('members')
         .select('id, name, user_id')
         .not('user_id', 'is', null)
-        .order('name', {
-          ascending: true,
-        })
+        .order('name', { ascending: true })
 
-      if (memberError) {
-        throw memberError
-      }
+      if (memberError) throw memberError
 
-      const {
-        data: presenceData,
-        error: presenceError,
-      } = await supabase
+      const { data: presenceData, error: presenceError } = await supabase
         .from('member_presence')
         .select('user_id, last_seen_at')
 
-      if (presenceError) {
-        throw presenceError
-      }
+      if (presenceError) throw presenceError
 
       setMembers(memberData || [])
       setPresence(presenceData || [])
     } catch (memberError) {
-      console.error(
-        'Member analytics error:',
-        memberError
-      )
-
+      console.error('Member analytics error:', memberError)
       setMembersError(memberError.message)
       setMembers([])
       setPresence([])
@@ -250,223 +204,114 @@ function App() {
   }
 
   /* =========================================================
-     PERIOD FILTER
-     ========================================================= */
-
-  const filteredEvents = useMemo(() => {
-    if (period === 'all') {
-      return events
-    }
-
-    const days = Number(period)
-
-    const now = new Date()
-    const startDate = new Date()
-
-    startDate.setHours(0, 0, 0, 0)
-
-    startDate.setDate(
-      now.getDate() - (days - 1)
-    )
-
-    return events.filter((event) => {
-      return (
-        new Date(event.created_at) >= startDate
-      )
-    })
-  }, [events, period])
-
-  /* =========================================================
-     STATISTICS
+     ALL-TIME WEBSITE STATISTICS
      ========================================================= */
 
   const statistics = useMemo(() => {
-    const pageViewEvents =
-      filteredEvents.filter(
-        (event) =>
-          event.event_type === 'page_view'
-      )
+    const pageViewEvents = events.filter(
+      (event) => event.event_type === 'page_view'
+    )
 
-    const uniqueSessions = new Set(
-      filteredEvents
+    const sessionMap = new Map()
+
+    events.forEach((event) => {
+      const sessionId = event.session_id || `event-${event.id}`
+
+      if (!sessionMap.has(sessionId)) {
+        sessionMap.set(sessionId, {
+          hasMember: false,
+        })
+      }
+
+      if (event.user_id) {
+        sessionMap.get(sessionId).hasMember = true
+      }
+    })
+
+    const totalVisitors = sessionMap.size
+
+    const memberUserIds = new Set(
+      members.map((member) => member.user_id).filter(Boolean)
+    )
+
+    const visitedMemberIds = new Set(
+      events
+        .map((event) => event.user_id)
+        .filter((userId) => userId && memberUserIds.has(userId))
+    )
+
+    const installedMemberIds = new Set(
+      events
+        .filter((event) => event.is_pwa === true && event.user_id)
+        .map((event) => event.user_id)
+        .filter((userId) => memberUserIds.has(userId))
+    )
+
+    // Unique PWA sessions where no registered member account was identified.
+    // This represents non-member visitors using the installed PWA.
+    const installedGuestSessionIds = new Set(
+      events
+        .filter((event) => event.is_pwa === true && !event.user_id)
         .map((event) => event.session_id)
         .filter(Boolean)
     )
 
-    const mobileEvents =
-      filteredEvents.filter(
-        (event) =>
-          event.device_type === 'mobile'
-      )
-
-    const tabletEvents =
-      filteredEvents.filter(
-        (event) =>
-          event.device_type === 'tablet'
-      )
-
-    const desktopEvents =
-      filteredEvents.filter(
-        (event) =>
-          event.device_type === 'desktop'
-      )
-
-    const pwaEvents =
-      filteredEvents.filter(
-        (event) => event.is_pwa === true
-      )
-
-    const returningSessions = (() => {
-      const counts = {}
-
-      filteredEvents.forEach((event) => {
-        if (!event.session_id) return
-
-        counts[event.session_id] =
-          (counts[event.session_id] || 0) + 1
-      })
-
-      return Object.values(counts).filter(
-        (count) => count > 1
-      ).length
-    })()
+    const guestVisitors = [...sessionMap.values()].filter(
+      (sessionInfo) => !sessionInfo.hasMember
+    ).length
 
     return {
-      totalEvents: filteredEvents.length,
-      pageViews: pageViewEvents.length,
-      uniqueVisitors: uniqueSessions.size,
-      sessions: uniqueSessions.size,
-      returningSessions,
-      mobile: mobileEvents.length,
-      tablet: tabletEvents.length,
-      desktop: desktopEvents.length,
-      pwa: pwaEvents.length,
+      totalVisitors,
+      membersVisited: visitedMemberIds.size,
+      guestVisitors,
+      membersInstalled: installedMemberIds.size,
+      guestInstalled: installedGuestSessionIds.size,
+      totalPageVisits: pageViewEvents.length,
     }
-  }, [filteredEvents])
+  }, [events, members])
 
   /* =========================================================
-     PAGE STATISTICS
+     PAGE VISITS
      ========================================================= */
 
   const pageStatistics = useMemo(() => {
     const counts = {}
 
-    filteredEvents
-      .filter(
-        (event) =>
-          event.event_type === 'page_view'
-      )
+    events
+      .filter((event) => event.event_type === 'page_view')
       .forEach((event) => {
-        const page =
-          event.page_path || '/'
-
-        counts[page] =
-          (counts[page] || 0) + 1
+        const page = event.page_path || '/'
+        counts[page] = (counts[page] || 0) + 1
       })
 
-    return Object.entries(counts)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 10)
-  }, [filteredEvents])
+    return Object.entries(counts).sort((a, b) => b[1] - a[1])
+  }, [events])
 
-  /* =========================================================
-     BROWSER STATISTICS
-     ========================================================= */
+  function getPageLabel(path) {
+    const labels = {
+      '/': '🏠 Home',
+      '/home': '🏠 Home',
+      '/members': '👥 Members',
+      '/gallery': '🖼️ Gallery / Photos',
+      '/contact': '📞 Contact',
+      '/login': '🔐 Login',
+      '/admin': '👨‍💼 Admin Dashboard',
+    }
 
-  const browserStatistics = useMemo(() => {
-    const counts = {}
+    return labels[path] || path
+  }
 
-    filteredEvents.forEach((event) => {
-      const browser =
-        event.browser || 'Unknown'
+  const trackingStartedAt = useMemo(() => {
+    if (!events.length) return null
 
-      counts[browser] =
-        (counts[browser] || 0) + 1
-    })
-
-    return Object.entries(counts).sort(
-      (a, b) => b[1] - a[1]
-    )
-  }, [filteredEvents])
-
-  /* =========================================================
-     OS STATISTICS
-     ========================================================= */
-
-  const operatingSystemStatistics =
-    useMemo(() => {
-      const counts = {}
-
-      filteredEvents.forEach((event) => {
-        const operatingSystem =
-          event.operating_system ||
-          'Unknown'
-
-        counts[operatingSystem] =
-          (counts[operatingSystem] || 0) + 1
-      })
-
-      return Object.entries(counts).sort(
-        (a, b) => b[1] - a[1]
-      )
-    }, [filteredEvents])
-
-  /* =========================================================
-     DEVICE STATISTICS
-     ========================================================= */
-
-  const deviceStatistics = useMemo(() => {
-    return [
-      ['Desktop', statistics.desktop],
-      ['Mobile', statistics.mobile],
-      ['Tablet', statistics.tablet],
-    ].filter((item) => item[1] > 0)
-  }, [statistics])
-
-  /* =========================================================
-     DAILY STATISTICS
-     ========================================================= */
-
-  const dailyStatistics = useMemo(() => {
-    const counts = {}
-
-    filteredEvents
-      .filter(
-        (event) =>
-          event.event_type === 'page_view'
-      )
-      .forEach((event) => {
-        const date = new Date(
-          event.created_at
-        )
-
-        const key = [
-          date.getFullYear(),
-          String(
-            date.getMonth() + 1
-          ).padStart(2, '0'),
-          String(
-            date.getDate()
-          ).padStart(2, '0'),
-        ].join('-')
-
-        counts[key] =
-          (counts[key] || 0) + 1
-      })
-
-    return Object.entries(counts)
-      .sort((a, b) =>
-        a[0].localeCompare(b[0])
-      )
-      .slice(-30)
-  }, [filteredEvents])
-
-  const maxDailyValue = Math.max(
-    ...dailyStatistics.map(
-      (item) => item[1]
-    ),
-    1
-  )
+    return events.reduce((earliest, event) => {
+      if (!event.created_at) return earliest
+      if (!earliest) return event.created_at
+      return new Date(event.created_at) < new Date(earliest)
+        ? event.created_at
+        : earliest
+    }, null)
+  }, [events])
 
   /* =========================================================
      MEMBER ANALYTICS
@@ -476,36 +321,24 @@ function App() {
     const now = Date.now()
 
     return members.map((member) => {
-      const memberPresence =
-        presence.find(
-          (item) =>
-            item.user_id === member.user_id
-        )
+      const memberPresence = presence.find(
+        (item) => item.user_id === member.user_id
+      )
 
-      const lastSeen =
-        memberPresence?.last_seen_at || null
+      const lastSeen = memberPresence?.last_seen_at || null
 
       const isOnline =
         lastSeen &&
-        now -
-          new Date(lastSeen).getTime() <=
-          ONLINE_THRESHOLD_MINUTES *
-            60 *
-            1000
+        now - new Date(lastSeen).getTime() <=
+          ONLINE_THRESHOLD_MINUTES * 60 * 1000
 
-      const memberEvents =
-        filteredEvents.filter(
-          (event) =>
-            event.user_id ===
-            member.user_id
-        )
+      const memberEvents = events.filter(
+        (event) => event.user_id === member.user_id
+      )
 
-      const pageVisits =
-        memberEvents.filter(
-          (event) =>
-            event.event_type ===
-            'page_view'
-        )
+      const pageVisits = memberEvents.filter(
+        (event) => event.event_type === 'page_view'
+      )
 
       return {
         ...member,
@@ -515,177 +348,90 @@ function App() {
         events: memberEvents,
       }
     })
-  }, [
-    members,
-    presence,
-    filteredEvents,
-  ])
-
-  /* =========================================================
-     MEMBER SEARCH + FILTER
-     ========================================================= */
+  }, [members, presence, events])
 
   const filteredMembers = useMemo(() => {
-    const search =
-      memberSearch.trim().toLowerCase()
+    const search = memberSearch.trim().toLowerCase()
 
-    return memberAnalytics.filter(
-      (member) => {
-        const matchesSearch =
-          !search ||
-          (member.name || '')
-            .toLowerCase()
-            .includes(search)
+    return memberAnalytics.filter((member) => {
+      const matchesSearch =
+        !search || (member.name || '').toLowerCase().includes(search)
 
-        const matchesStatus =
-          memberStatusFilter ===
-            'all' ||
-          (memberStatusFilter ===
-            'online' &&
-            member.isOnline) ||
-          (memberStatusFilter ===
-            'offline' &&
-            !member.isOnline)
+      const matchesStatus =
+        memberStatusFilter === 'all' ||
+        (memberStatusFilter === 'online' && member.isOnline) ||
+        (memberStatusFilter === 'offline' && !member.isOnline)
 
-        return (
-          matchesSearch &&
-          matchesStatus
-        )
-      }
-    )
-  }, [
-    memberAnalytics,
-    memberSearch,
-    memberStatusFilter,
-  ])
-
-  /* =========================================================
-     MEMBER PAGINATION
-     ========================================================= */
+      return matchesSearch && matchesStatus
+    })
+  }, [memberAnalytics, memberSearch, memberStatusFilter])
 
   const totalMemberPages = Math.max(
     1,
-    Math.ceil(
-      filteredMembers.length /
-        MEMBERS_PER_PAGE
-    )
+    Math.ceil(filteredMembers.length / MEMBERS_PER_PAGE)
   )
 
   useEffect(() => {
     if (memberPage > totalMemberPages) {
       setMemberPage(totalMemberPages)
     }
-  }, [
-    memberPage,
-    totalMemberPages,
-  ])
+  }, [memberPage, totalMemberPages])
 
   useEffect(() => {
     setMemberPage(1)
-  }, [
-    memberSearch,
-    memberStatusFilter,
-  ])
+  }, [memberSearch, memberStatusFilter])
 
-  const paginatedMembers =
-    useMemo(() => {
-      const start =
-        (memberPage - 1) *
-        MEMBERS_PER_PAGE
+  const paginatedMembers = useMemo(() => {
+    const start = (memberPage - 1) * MEMBERS_PER_PAGE
+    return filteredMembers.slice(start, start + MEMBERS_PER_PAGE)
+  }, [filteredMembers, memberPage])
 
-      return filteredMembers.slice(
-        start,
-        start + MEMBERS_PER_PAGE
-      )
-    }, [
-      filteredMembers,
-      memberPage,
-    ])
+  const onlineMemberCount = memberAnalytics.filter(
+    (member) => member.isOnline
+  ).length
 
-  const onlineMemberCount =
-    memberAnalytics.filter(
-      (member) => member.isOnline
-    ).length
+  const offlineMemberCount = memberAnalytics.length - onlineMemberCount
 
-  const offlineMemberCount =
-    memberAnalytics.length -
-    onlineMemberCount
+  const selectedMemberAnalytics = useMemo(() => {
+    if (!selectedMember) return null
 
-  /* =========================================================
-     SELECTED MEMBER HISTORY
-     ========================================================= */
+    return (
+      memberAnalytics.find(
+        (member) => member.user_id === selectedMember.user_id
+      ) || selectedMember
+    )
+  }, [selectedMember, memberAnalytics])
 
-  const selectedMemberAnalytics =
-    useMemo(() => {
-      if (!selectedMember) {
-        return null
-      }
+  const memberHistory = useMemo(() => {
+    if (!selectedMemberAnalytics) return []
 
-      return (
-        memberAnalytics.find(
-          (member) =>
-            member.user_id ===
-            selectedMember.user_id
-        ) || selectedMember
-      )
-    }, [
-      selectedMember,
-      memberAnalytics,
-    ])
-
-  const memberHistory =
-    useMemo(() => {
-      if (!selectedMemberAnalytics) {
-        return []
-      }
-
-      return [
-        ...(selectedMemberAnalytics.events ||
-          []),
-      ].sort(
-        (a, b) =>
-          new Date(b.created_at) -
-          new Date(a.created_at)
-      )
-    }, [selectedMemberAnalytics])
+    return [...(selectedMemberAnalytics.events || [])].sort(
+      (a, b) => new Date(b.created_at) - new Date(a.created_at)
+    )
+  }, [selectedMemberAnalytics])
 
   /* =========================================================
-     FORMATTING
+     FORMATTING + NAVIGATION
      ========================================================= */
 
   function formatDate(dateString) {
-    if (!dateString) {
-      return '-'
-    }
-
-    return new Date(
-      dateString
-    ).toLocaleString()
+    if (!dateString) return '-'
+    return new Date(dateString).toLocaleString()
   }
 
-  function formatDay(dateString) {
-    const date = new Date(
-      `${dateString}T00:00:00`
-    )
+  function formatTrackingDate(dateString) {
+    if (!dateString) return '-'
 
-    return date.toLocaleDateString(
-      undefined,
-      {
-        day: '2-digit',
-        month: 'short',
-      }
-    )
+    return new Date(dateString).toLocaleDateString(undefined, {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+    })
   }
 
   function getMemberInitial(name) {
-    if (!name) {
-      return '?'
-    }
-
-    return name
-      .trim()
-      .charAt(0)
-      .toUpperCase()
+    if (!name) return '?'
+    return name.trim().charAt(0).toUpperCase()
   }
 
   function handleOpenMember(member) {
@@ -701,98 +447,49 @@ function App() {
     setSelectedMember(null)
   }
 
-  /* =========================================================
-     LOGIN CHECK
-     ========================================================= */
-
   if (checkingAuth) {
     return (
       <div className="login-page">
         <div className="login-card">
-          <div className="login-logo">
-            📊
-          </div>
-
-          <h1>
-            Netaji Team Analytics
-          </h1>
-
-          <p>
-            Checking administrator access...
-          </p>
+          <div className="login-logo">📊</div>
+          <h1>Netaji Team Analytics</h1>
+          <p>Checking administrator access...</p>
         </div>
       </div>
     )
   }
 
-  /* =========================================================
-     LOGIN PAGE
-     ========================================================= */
-
   if (!session) {
     return (
       <div className="login-page">
         <div className="login-card">
-          <div className="login-logo">
-            📊
-          </div>
+          <div className="login-logo">📊</div>
+          <h1>Netaji Team Analytics</h1>
+          <p className="login-subtitle">Private administrator dashboard</p>
 
-          <h1>
-            Netaji Team Analytics
-          </h1>
-
-          <p className="login-subtitle">
-            Private administrator dashboard
-          </p>
-
-          <form
-            onSubmit={handleLogin}
-          >
-            <label>
-              Email
-            </label>
-
+          <form onSubmit={handleLogin}>
+            <label>Email</label>
             <input
               type="email"
               placeholder="Admin email"
               value={email}
-              onChange={(event) =>
-                setEmail(
-                  event.target.value
-                )
-              }
+              onChange={(event) => setEmail(event.target.value)}
               required
             />
 
-            <label>
-              Password
-            </label>
-
+            <label>Password</label>
             <input
               type="password"
               placeholder="Password"
               value={password}
-              onChange={(event) =>
-                setPassword(
-                  event.target.value
-                )
-              }
+              onChange={(event) => setPassword(event.target.value)}
               required
             />
 
-            {loginError && (
-              <div className="login-error">
-                {loginError}
-              </div>
-            )}
+            {loginError && <div className="login-error">{loginError}</div>}
 
-            <button
-              type="submit"
-              disabled={loggingIn}
-            >
-              {loggingIn
-                ? 'Signing in...'
-                : '🔐 Admin Login'}
+            <button type="submit" disabled={loggingIn}>
+              {loggingIn ? 'Signing in...' : '🔐 Admin Login'}
             </button>
           </form>
         </div>
@@ -800,61 +497,28 @@ function App() {
     )
   }
 
-  /* =========================================================
-     MAIN DASHBOARD
-     ========================================================= */
-
   return (
     <div className="analytics-app">
-
-      {/* HEADER */}
-
       <header className="analytics-header">
         <div className="header-brand">
-          <div className="header-icon">
-            📊
-          </div>
-
+          <div className="header-icon">📊</div>
           <div>
-            <h1>
-              Netaji Team Analytics
-            </h1>
-
-            <p>
-              Private website analytics dashboard
-            </p>
+            <h1>Netaji Team Analytics</h1>
+            <p>Website visitor and member analytics</p>
           </div>
         </div>
 
         <div className="header-actions">
-          <button
-            onClick={loadAnalytics}
-          >
-            🔄 Refresh
-          </button>
-
-          <button
-            onClick={handleLogout}
-          >
-            🚪 Logout
-          </button>
+          <button onClick={loadAnalytics}>🔄 Refresh</button>
+          <button onClick={handleLogout}>🚪 Logout</button>
         </div>
       </header>
 
-      {/* NAVIGATION */}
-
       <nav className="analytics-nav">
         <button
-          className={
-            activeSection ===
-            'overview'
-              ? 'nav-active'
-              : ''
-          }
+          className={activeSection === 'overview' ? 'nav-active' : ''}
           onClick={() => {
-            setActiveSection(
-              'overview'
-            )
+            setActiveSection('overview')
             setSelectedMember(null)
           }}
         >
@@ -862,590 +526,129 @@ function App() {
         </button>
 
         <button
-          className={
-            activeSection ===
-            'members'
-              ? 'nav-active'
-              : ''
-          }
-          onClick={
-            handleOpenMembersSection
-          }
+          className={activeSection === 'members' ? 'nav-active' : ''}
+          onClick={handleOpenMembersSection}
         >
           👥 Team Members
-          <span className="nav-count">
-            {members.length}
-          </span>
+          <span className="nav-count">{members.length}</span>
         </button>
       </nav>
 
       <main className="analytics-content">
-
-        {/* =================================================
-            OVERVIEW
-            ================================================= */}
-
-        {activeSection ===
-          'overview' && (
+        {activeSection === 'overview' && (
           <>
-            {/* PERIOD */}
-
-            <section className="period-panel">
+            <section className="tracking-summary">
               <div>
-                <h2>
-                  Analytics Period
-                </h2>
-
+                <h2>📈 Website Overview</h2>
                 <p>
-                  Select the period you
-                  want to analyze.
+                  All-time analytics collected from the deployed Netaji Team website.
                 </p>
               </div>
 
-              <div className="period-buttons">
-
-                <button
-                  className={
-                    period === '1'
-                      ? 'active'
-                      : ''
-                  }
-                  onClick={() =>
-                    setPeriod('1')
-                  }
-                >
-                  Today
-                </button>
-
-                <button
-                  className={
-                    period === '7'
-                      ? 'active'
-                      : ''
-                  }
-                  onClick={() =>
-                    setPeriod('7')
-                  }
-                >
-                  7 Days
-                </button>
-
-                <button
-                  className={
-                    period === '30'
-                      ? 'active'
-                      : ''
-                  }
-                  onClick={() =>
-                    setPeriod('30')
-                  }
-                >
-                  30 Days
-                </button>
-
-                <button
-                  className={
-                    period === 'all'
-                      ? 'active'
-                      : ''
-                  }
-                  onClick={() =>
-                    setPeriod('all')
-                  }
-                >
-                  All Time
-                </button>
-
+              <div className="tracking-meta">
+                <span>Tracking since</span>
+                <strong>{formatTrackingDate(trackingStartedAt)}</strong>
               </div>
             </section>
 
-            {/* STATS */}
+            {loading && (
+              <div className="message">Loading all website analytics...</div>
+            )}
 
-            <section className="stats-grid">
-
-              <div className="stat-card">
-                <span>
-                  👥 Unique Visitors
-                </span>
-
-                <strong>
-                  {
-                    statistics.uniqueVisitors
-                  }
-                </strong>
+            {!loading && error && (
+              <div className="error-message">
+                <strong>Database error</strong>
+                <br />
+                {error}
               </div>
+            )}
 
-              <div className="stat-card">
-                <span>
-                  📄 Page Views
-                </span>
-
-                <strong>
-                  {statistics.pageViews}
-                </strong>
-              </div>
-
-              <div className="stat-card">
-                <span>
-                  🔗 Sessions
-                </span>
-
-                <strong>
-                  {statistics.sessions}
-                </strong>
-              </div>
-
-              <div className="stat-card">
-                <span>
-                  🔁 Returning Sessions
-                </span>
-
-                <strong>
-                  {
-                    statistics.returningSessions
-                  }
-                </strong>
-              </div>
-
-              <div className="stat-card">
-                <span>
-                  📱 Mobile Events
-                </span>
-
-                <strong>
-                  {statistics.mobile}
-                </strong>
-              </div>
-
-              <div className="stat-card">
-                <span>
-                  💻 Desktop Events
-                </span>
-
-                <strong>
-                  {statistics.desktop}
-                </strong>
-              </div>
-
-              <div className="stat-card">
-                <span>
-                  📲 PWA Events
-                </span>
-
-                <strong>
-                  {statistics.pwa}
-                </strong>
-              </div>
-
-              <div className="stat-card">
-                <span>
-                  ⚡ Total Events
-                </span>
-
-                <strong>
-                  {statistics.totalEvents}
-                </strong>
-              </div>
-
-            </section>
-
-            {/* DAILY CHART */}
-
-            <section className="analytics-panel">
-
-              <div className="panel-header">
-                <h2>
-                  📈 Page Views by Day
-                </h2>
-
-                <p>
-                  Daily page-view activity
-                  for the selected period.
-                </p>
-              </div>
-
-              {dailyStatistics.length ===
-              0 ? (
-                <div className="message">
-                  No page-view data for
-                  this period.
-                </div>
-              ) : (
-                <div className="chart">
-
-                  {dailyStatistics.map(
-                    ([date, value]) => (
-                      <div
-                        className="chart-column"
-                        key={date}
-                      >
-                        <div className="chart-value">
-                          {value}
-                        </div>
-
-                        <div
-                          className="chart-bar"
-                          style={{
-                            height: `${Math.max(
-                              (value /
-                                maxDailyValue) *
-                                180,
-                              8
-                            )}px`,
-                          }}
-                        />
-
-                        <div className="chart-label">
-                          {formatDay(
-                            date
-                          )}
-                        </div>
-                      </div>
-                    )
-                  )}
-
-                </div>
-              )}
-
-            </section>
-
-            {/* PAGES + DEVICES */}
-
-            <div className="two-column">
-
-              <section className="analytics-panel">
-
-                <div className="panel-header">
-                  <h2>
-                    📄 Popular Pages
-                  </h2>
-
-                  <p>
-                    Most visited website
-                    pages.
-                  </p>
-                </div>
-
-                {pageStatistics.length ===
-                0 ? (
-                  <div className="message">
-                    No page data
-                    available.
+            {!loading && !error && (
+              <>
+                <section className="stats-grid simple-stats-grid">
+                  <div className="stat-card">
+                    <span>👥 Total Visitors</span>
+                    <strong>{statistics.totalVisitors}</strong>
+                    <small>Unique visitor sessions</small>
                   </div>
-                ) : (
-                  <div className="ranking-list">
 
-                    {pageStatistics.map(
-                      (
-                        [page, count],
-                        index
-                      ) => (
-                        <div
-                          className="ranking-row"
-                          key={page}
-                        >
-                          <span className="ranking-number">
-                            {index + 1}
-                          </span>
-
-                          <span className="ranking-name">
-                            {page}
-                          </span>
-
-                          <strong>
-                            {count}
-                          </strong>
-                        </div>
-                      )
-                    )}
-
+                  <div className="stat-card">
+                    <span>👤 Members Visited</span>
+                    <strong>{statistics.membersVisited}</strong>
+                    <small>Registered members</small>
                   </div>
-                )}
 
-              </section>
-
-              <section className="analytics-panel">
-
-                <div className="panel-header">
-                  <h2>
-                    💻 Devices
-                  </h2>
-
-                  <p>
-                    Devices generating
-                    analytics events.
-                  </p>
-                </div>
-
-                {deviceStatistics.length ===
-                0 ? (
-                  <div className="message">
-                    No device data
-                    available.
+                  <div className="stat-card">
+                    <span>🌐 Guest Visitors</span>
+                    <strong>{statistics.guestVisitors}</strong>
+                    <small>Visitors without member login</small>
                   </div>
-                ) : (
-                  <div className="ranking-list">
 
-                    {deviceStatistics.map(
-                      (
-                        [device, count]
-                      ) => (
-                        <div
-                          className="ranking-row"
-                          key={device}
-                        >
-                          <span className="ranking-name">
-                            {device}
-                          </span>
-
-                          <strong>
-                            {count}
-                          </strong>
-                        </div>
-                      )
-                    )}
-
+                  <div className="stat-card">
+                    <span>📱 Members Installed</span>
+                    <strong>{statistics.membersInstalled}</strong>
+                    <small>Registered members using the installed PWA</small>
                   </div>
-                )}
 
-              </section>
+                  <div className="stat-card">
+                    <span>🌐 Guest App Users</span>
+                    <strong>{statistics.guestInstalled}</strong>
+                    <small>Non-members using the installed PWA</small>
+                  </div>
+                </section>
 
-            </div>
+                <section className="analytics-panel page-visits-panel">
+                  <div className="panel-header">
+                    <h2>📄 Page Visits</h2>
+                    <p>
+                      Total visits to each page since analytics tracking started.
+                    </p>
+                  </div>
 
-            {/* BROWSERS + OS */}
+                  <div className="page-total-banner">
+                    <span>Total page visits</span>
+                    <strong>{statistics.totalPageVisits}</strong>
+                  </div>
 
-            <div className="two-column">
-
-              <section className="analytics-panel">
-
-                <div className="panel-header">
-                  <h2>
-                    🌐 Browsers
-                  </h2>
-
-                  <p>
-                    Browsers used by
-                    visitors.
-                  </p>
-                </div>
-
-                <div className="ranking-list">
-
-                  {browserStatistics.length ===
-                  0 ? (
-                    <div className="message">
-                      No browser data
-                      available.
-                    </div>
+                  {pageStatistics.length === 0 ? (
+                    <div className="message">No page visits recorded yet.</div>
                   ) : (
-                    browserStatistics.map(
-                      (
-                        [browser, count]
-                      ) => (
-                        <div
-                          className="ranking-row"
-                          key={browser}
-                        >
-                          <span className="ranking-name">
-                            {browser}
-                          </span>
-
-                          <strong>
-                            {count}
-                          </strong>
+                    <div className="ranking-list page-ranking-list">
+                      {pageStatistics.map(([page, count], index) => (
+                        <div className="ranking-row" key={page}>
+                          <span className="ranking-number">{index + 1}</span>
+                          <span className="ranking-name">{getPageLabel(page)}</span>
+                          <strong>{count}</strong>
                         </div>
-                      )
-                    )
-                  )}
-
-                </div>
-
-              </section>
-
-              <section className="analytics-panel">
-
-                <div className="panel-header">
-                  <h2>
-                    🖥️ Operating Systems
-                  </h2>
-
-                  <p>
-                    Operating systems
-                    used by visitors.
-                  </p>
-                </div>
-
-                <div className="ranking-list">
-
-                  {operatingSystemStatistics.length ===
-                  0 ? (
-                    <div className="message">
-                      No operating system
-                      data available.
+                      ))}
                     </div>
-                  ) : (
-                    operatingSystemStatistics.map(
-                      (
-                        [
-                          operatingSystem,
-                          count,
-                        ]
-                      ) => (
-                        <div
-                          className="ranking-row"
-                          key={
-                            operatingSystem
-                          }
-                        >
-                          <span className="ranking-name">
-                            {
-                              operatingSystem
-                            }
-                          </span>
-
-                          <strong>
-                            {count}
-                          </strong>
-                        </div>
-                      )
-                    )
                   )}
+                </section>
 
-                </div>
-
-              </section>
-
-            </div>
-
-            {/* RECENT ACTIVITY */}
-
-            <section className="analytics-panel">
-
-              <div className="panel-header">
-                <h2>
-                  🕒 Recent Activity
-                </h2>
-
-                <p>
-                  Latest analytics events
-                  received from the
-                  Netaji Team website.
-                </p>
-              </div>
-
-              {loading && (
-                <div className="message">
-                  Loading analytics...
-                </div>
-              )}
-
-              {!loading && error && (
-                <div className="error-message">
-                  <strong>
-                    Database error
-                  </strong>
-
-                  <br />
-
-                  {error}
-                </div>
-              )}
-
-              {!loading &&
-                !error &&
-                filteredEvents.length ===
-                  0 && (
-                  <div className="message">
-                    No analytics data for
-                    this period.
+                <section className="analytics-panel analytics-note-panel">
+                  <div className="panel-header">
+                    <h2>ℹ️ How these numbers are counted</h2>
                   </div>
-                )}
-
-              {!loading &&
-                !error &&
-                filteredEvents.length >
-                  0 && (
-                  <div className="table-container">
-
-                    <table>
-
-                      <thead>
-                        <tr>
-                          <th>Time</th>
-                          <th>Event</th>
-                          <th>Page</th>
-                          <th>Device</th>
-                          <th>Browser</th>
-                          <th>OS</th>
-                          <th>PWA</th>
-                        </tr>
-                      </thead>
-
-                      <tbody>
-
-                        {filteredEvents
-                          .slice(0, 100)
-                          .map((event) => (
-                            <tr
-                              key={event.id}
-                            >
-                              <td>
-                                {formatDate(
-                                  event.created_at
-                                )}
-                              </td>
-
-                              <td>
-                                {
-                                  event.event_type ||
-                                  '-'
-                                }
-                              </td>
-
-                              <td>
-                                {
-                                  event.page_path ||
-                                  '-'
-                                }
-                              </td>
-
-                              <td>
-                                {
-                                  event.device_type ||
-                                  '-'
-                                }
-                              </td>
-
-                              <td>
-                                {
-                                  event.browser ||
-                                  '-'
-                                }
-                              </td>
-
-                              <td>
-                                {
-                                  event.operating_system ||
-                                  '-'
-                                }
-                              </td>
-
-                              <td>
-                                {event.is_pwa
-                                  ? 'Yes'
-                                  : 'No'}
-                              </td>
-                            </tr>
-                          ))}
-
-                      </tbody>
-
-                    </table>
-
+                  <div className="analytics-notes">
+                    <p>
+                      <strong>Total Visitors</strong> counts unique visitor sessions recorded by the website.
+                    </p>
+                    <p>
+                      <strong>Members Visited</strong> counts registered members whose user account appears in the analytics events.
+                    </p>
+                    <p>
+                      <strong>Guest Visitors</strong> counts visitor sessions where no registered member account was identified.
+                    </p>
+                    <p>
+                      <strong>Members Installed</strong> counts unique registered members who generated an analytics event while using the installed PWA.
+                    </p>
+                    <p>
+                      <strong>Guest App Users</strong> counts unique PWA sessions where no registered member account was identified.
+                    </p>
                   </div>
-                )}
-
-            </section>
+                </section>
+              </>
+            )}
           </>
         )}
 
